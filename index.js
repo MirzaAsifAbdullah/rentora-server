@@ -1,4 +1,3 @@
-
 import express from "express";
 import "dotenv/config";
 import cors from "cors";
@@ -19,23 +18,56 @@ console.log("MongoDB connected successfully");
 const db = client.db("rentora");
 const equipmentsCollection = db.collection("equipments");
 
-// GET ALL EQUIPMENTS
+/** Escape user input before turning it into a MongoDB regular expression. */
+function escapeRegex(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** `a,b` and repeated `?key=a&key=b` both become `["a", "b"]`. */
+function toList(value) {
+  const raw = Array.isArray(value) ? value : [value];
+
+  return raw
+    .flatMap((entry) => (typeof entry === "string" ? entry.split(",") : []))
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function normalizeEquipment(equipment) {
+  return {
+    ...equipment,
+    isAvailable: equipment.isAvailable !== false,
+  };
+}
+
+const EQUIPMENT_SORTS = {
+  newest: { createdAt: -1, _id: -1 },
+  "price-asc": { price: 1, _id: 1 },
+  "price-desc": { price: -1, _id: -1 },
+};
+
+// GET all equipment or equipment by owner email
 app.get("/all-equipments", async (req, res) => {
   try {
-    const { ownerEmail } = req.query;
+    const email = req.query.email;
 
-    const query = ownerEmail ? { ownerEmail } : {};
+    let query = {};
 
-    const equipments = await equipmentsCollection.find(query).toArray();
+    if (email) {
+      // Get equipment of a specific owner
+      query.ownerEmail = email;
+    } else {
+      // Get all approved equipment for public marketplace
+      query.status = "approved";
+    }
 
-    res.send(
-      equipments.map((equipment) => ({
-        ...equipment,
-        isAvailable: equipment.isAvailable !== false,
-      }))
-    );
+    const result = await equipmentsCollection.find(query).toArray();
+
+    res.send(result);
   } catch (error) {
-    res.status(500).send({ message: error.message });
+    res.status(500).send({
+      message: "Failed to get equipment",
+    });
   }
 });
 
@@ -202,7 +234,7 @@ app.patch("/all-equipments/:id", async (req, res) => {
 
     const result = await equipmentsCollection.updateOne(
       { _id: new ObjectId(id), ownerEmail },
-      { $set: update }
+      { $set: update },
     );
 
     if (result.matchedCount === 0) {
@@ -261,9 +293,7 @@ app.post("/upload-image", async (req, res) => {
       return res.status(400).send({ message: "Image is required" });
     }
 
-    const base64Image = image.includes(",")
-      ? image.split(",")[1]
-      : image;
+    const base64Image = image.includes(",") ? image.split(",")[1] : image;
 
     const formData = new FormData();
     formData.append("image", base64Image);
@@ -273,7 +303,7 @@ app.post("/upload-image", async (req, res) => {
       {
         method: "POST",
         body: formData,
-      }
+      },
     );
 
     const data = await response.json();
